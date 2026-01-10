@@ -1,0 +1,183 @@
+name: Update Chart and Release
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+env:
+  CHART_FILE: charts/photoprism/Chart.yaml
+
+jobs:
+  update-and-release:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      packages: write
+      pages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get latest PhotoPrism image tag from Docker Hub
+        id: get_tag
+        run: |
+          set -euo pipefail
+
+          echo "Fetching latest tags from Docker Hub..."
+
+          RESPONSE=$(curl -fsSL \
+            "https://registry.hub.docker.com/v2/repositories/photoprism/photoprism/tags/?page_size=50&ordering=last_updated")
+
+          ALL_TAGS=$(echo "$RESPONSE" | jq -r '.results[].name')
+
+          if [ -z "$ALL_TAGS" ]; then
+            echo "❌ Failed to fetch tags from Docker Hub"
+            exit 1
+          fi
+
+          echo "Available tags (first 25):"
+          echo "$ALL_TAGS" | head -n 25
+
+          LATEST_TAG=$(echo "$ALL_TAGS" | grep -E '^2[0-9]{5}$' | head -n1 || true)
+
+          if [ -z "$LATEST_TAG" ]; then
+            echo "⚠️  No valid date-format tag (YYMMDD) found, skipping update"
+            echo "should_skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "should_skip=false" >> $GITHUB_OUTPUT
+          echo "✅ Found latest tag: $LATEST_TAG"
+
+      - name: Check if update is needed
+        id: check_update
+        if: steps.get_tag.outputs.should_skip != 'true'
+        run: |
+          set -euo pipefail
+
+          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+
+          if [ ! -f "$CHART_FILE" ]; then
+            echo "❌ Chart file not found: $CHART_FILE"
+            exit 1
+          fi
+
+          CURRENT_APP_VERSION=$(grep '^appVersion:' "$CHART_FILE" | awk '{print $2}' | tr -d '"' | tr -d "'")
+
+          echo "📊 Version comparison:"
+          echo "  Current: $CURRENT_APP_VERSION"
+          echo "  Latest:  $LATEST_TAG"
+
+          if [ "$LATEST_TAG" = "$CURRENT_APP_VERSION" ]; then
+            echo "should_update=false" >> $GITHUB_OUTPUT
+            echo "✅ Already up to date"
+            exit 0
+          fi
+
+          if [ "$LATEST_TAG" -gt "$CURRENT_APP_VERSION" ] 2>/dev/null; then
+            echo "should_update=true" >> $GITHUB_OUTPUT
+            echo "⬆️  Update available: $CURRENT_APP_VERSION -> $LATEST_TAG"
+          else
+            echo "should_update=false" >> $GITHUB_OUTPUT
+            echo "ℹ️  Current version ($CURRENT_APP_VERSION) is newer than or equal to latest ($LATEST_TAG)"
+          fi
+
+      - name: Update Chart.yaml
+        id: update_chart
+        if: steps.check_update.outputs.should_update == 'true'
+        run: |
+          set -euo pipefail
+
+          NEW_APP_VERSION="${{ steps.get_tag.outputs.latest_tag }}"
+
+          CURRENT_VERSION=$(grep '^version:' "$CHART_FILE" | awk '{print $2}' | tr -d '"' | tr -d "'")
+          echo "📦 Current chart version: $CURRENT_VERSION"
+
+          MAJOR=$(echo "$CURRENT_VERSION" | cut -d. -f1)
+          MINOR=$(echo "$CURRENT_VERSION" | cut -d. -f2)
+          PATCH=$(echo "$CURRENT_VERSION" | cut -d. -f3)
+          
+          PATCH=${PATCH:-0}
+          
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "📦 New chart version: $NEW_VERSION"
+          echo "🏷️  New app version: $NEW_APP_VERSION"
+
+          sed -i "s|^version:.*|version: $NEW_VERSION|" "$CHART_FILE"
+          sed -i "s|^appVersion:.*|appVersion: \"$NEW_APP_VERSION\"|" "$CHART_FILE"
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new_app_version=$NEW_APP_VERSION" >> $GITHUB_OUTPUT
+
+          echo ""
+          echo "✅ Updated $CHART_FILE:"
+          grep -E '^(version|appVersion):' "$CHART_FILE"
+
+      - name: Commit and push changes
+        if: steps.check_update.outputs.should_update == 'true'
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add "$CHART_FILE"
+
+          if git diff --staged --quiet; then
+            echo "ℹ️  No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "chore(chart): bump photoprism to ${{ steps.update_chart.outputs.new_app_version }}" \
+            -m "- Update appVersion to ${{ steps.update_chart.outputs.new_app_version }}" \
+            -m "- Bump chart version to ${{ steps.update_chart.outputs.new_version }}"
+
+          git push
+
+          echo "✅ Changes committed and pushed"
+
+      - name: Set up Helm
+        if: steps.check_update.outputs.should_update == 'true'
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+
+      - name: Run chart-releaser
+        if: steps.check_update.outputs.should_update == 'true'
+        uses: helm/chart-releaser-action@v1.6.0
+        with:
+          charts_dir: charts
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Summary
+        if: steps.check_update.outputs.should_update == 'true'
+        run: |
+          echo "## 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Chart Version**: ${{ steps.update_chart.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **App Version**: ${{ steps.update_chart.outputs.new_app_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **PhotoPrism Tag**: \`${{ steps.get_tag.outputs.latest_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Chart has been released successfully!" >> $GITHUB_STEP_SUMMARY
+
+      - name: No update summary
+        if: steps.get_tag.outputs.should_skip == 'true' || steps.check_update.outputs.should_update == 'false'
+        run: |
+          echo "## ℹ️  No Update Required" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.get_tag.outputs.should_skip }}" = "true" ]; then
+            echo "No valid PhotoPrism date-format tag (YYMMDD) found in Docker Hub." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Chart is already up to date." >> $GITHUB_STEP_SUMMARY
+          fi

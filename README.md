@@ -7,8 +7,8 @@ PhotoPrism is a server-based application for browsing, organizing, and sharing y
 ## TL;DR;
 
 ```bash
-helm repo add p80n https://p80n.github.io/photoprism-helm/
-helm install photoprism p80n/photoprism --set persistence.enabled=false
+helm repo add photoprism https://moechs.github.io/photoprism-helm/
+helm install photoprism photoprism/photoprism --set persistence.enabled=false
 ```
 
 ## Introduction
@@ -26,10 +26,10 @@ the experience:
 
 ## Installing the Chart
 
-To install the chart with the release name `my-release`:
+To install the chart with the release name `photoprism`:
 
 ```bash
-helm install photoprism p80n/photoprism --create-namespace --namespace photoprism -f values.yaml
+helm install photoprism photoprism/photoprism --create-namespace --namespace photoprism -f values.yaml
 ```
 
 
@@ -78,12 +78,12 @@ See values.yaml for a more complete listing.
 For setting nested values, it's generally easiest to just specify a YAML file that with the correct values:
 
 ```bash
-$ helm install photoprism p80n/photoprism-helm -f values.yaml
+$ helm install photoprism photoprism/photoprism -f values.yaml
 ```
 
 You can specify each parameter using the `--set key=value[,key=value]` argument to `helm install`, but for nested values, it's complicated. For example:
 ```bash
-$ helm install photoprism p80n/photoprism-helm \
+$ helm install photoprism photoprism/photoprism \
     --set=image.tag=latest \
     --set=volumes[0].name=originals --set=volumes[0].nfs.server=my.nfs.server --set=volumes[0].nfs.path=/path
 ```
@@ -91,7 +91,7 @@ $ helm install photoprism p80n/photoprism-helm \
 ## Config
 PhotoPrism's configuration can be passed in through environment variables.
 To see what is available, you can consult
-https://github.com/photoprism/photoprism/blob/develop/docker-compose.yml
+https://github.com/photoprism/photoprism/blob/develop/compose.yaml
 or run `docker run photoprism/photoprism photoprism config` to see all possible values.
 
 Note: storage and database configuration, as well as the admin password, should be set
