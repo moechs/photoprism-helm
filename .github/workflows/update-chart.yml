@@ -33,7 +33,7 @@ jobs:
           echo "Fetching latest tags from Docker Hub..."
 
           RESPONSE=$(curl -fsSL \
-            "https://registry.hub.docker.com/v2/repositories/photoprism/photoprism/tags/?page_size=50&ordering=last_updated")
+            "https://registry.hub.docker.com/v2/repositories/photoprism/photoprism/tags/?page_size=25&ordering=last_updated")
 
           ALL_TAGS=$(echo "$RESPONSE" | jq -r '.results[].name')
 
